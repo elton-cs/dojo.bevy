@@ -1,6 +1,6 @@
 //! Basic example of Dojo v2 plugin usage using native Bevy tasks.
 //!
-//! This example demonstrates the same functionality as intro.rs but using 
+//! This example demonstrates the same functionality as intro.rs but using
 //! the new v2 plugin with native Bevy task integration.
 
 use bevy::input::ButtonState;
@@ -12,9 +12,7 @@ use starknet::macros::selector;
 use std::collections::HashSet;
 use torii_grpc_client::types::{Pagination, PaginationDirection, Query as ToriiQuery};
 
-use dojo_bevy_plugin::{
-    DojoEntityUpdatedV2, DojoInitializedEventV2, DojoPluginV2, DojoResourceV2,
-};
+use dojo_bevy_plugin::{DojoEntityUpdatedV2, DojoInitializedEventV2, DojoPluginV2, DojoResourceV2};
 
 const TORII_URL: &str = "http://localhost:8080";
 const KATANA_URL: &str = "http://0.0.0.0:5050";
@@ -46,8 +44,8 @@ struct EntityTracker {
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_plugins(DojoPluginV2)  // Use the v2 plugin
-        .init_resource::<DojoResourceV2>()  // Use v2 resource
+        .add_plugins(DojoPluginV2) // Use the v2 plugin
+        .init_resource::<DojoResourceV2>() // Use v2 resource
         .init_resource::<EntityTracker>()
         .add_event::<PositionUpdatedEvent>()
         .add_systems(Startup, setup)
@@ -64,7 +62,7 @@ fn main() {
 
 /// This system is responsible for handling the keyboard input.
 fn handle_keyboard_input(
-    mut dojo: ResMut<DojoResourceV2>,  // Use v2 resource
+    mut dojo: ResMut<DojoResourceV2>, // Use v2 resource
     mut keyboard_input_events: EventReader<KeyboardInput>,
 ) {
     for event in keyboard_input_events.read() {
@@ -84,7 +82,7 @@ fn handle_keyboard_input(
                     selector: SPAWN_SELECTOR,
                     calldata: vec![],
                 }];
-                dojo.queue_tx(calls);  // No tokio runtime needed
+                dojo.queue_tx(calls); // No tokio runtime needed
             }
             KeyCode::KeyS if is_pressed => {
                 info!("Setting up Torii subscription (v2).");
@@ -107,7 +105,7 @@ fn handle_keyboard_input(
                     calldata: vec![Felt::from(direction)],
                 }];
 
-                dojo.queue_tx(calls);  // No tokio runtime needed
+                dojo.queue_tx(calls); // No tokio runtime needed
             }
             _ => continue,
         }
@@ -149,8 +147,8 @@ fn update_cube_position(
 /// Reacts on Dojo v2 events.
 fn on_dojo_events(
     mut dojo: ResMut<DojoResourceV2>,
-    mut ev_initialized: EventReader<DojoInitializedEventV2>,  // Use v2 events
-    mut ev_retrieve_entities: EventReader<DojoEntityUpdatedV2>,  // Use v2 events
+    mut ev_initialized: EventReader<DojoInitializedEventV2>, // Use v2 events
+    mut ev_retrieve_entities: EventReader<DojoEntityUpdatedV2>, // Use v2 events
     mut ev_position_updated: EventWriter<PositionUpdatedEvent>,
 ) {
     for _ in ev_initialized.read() {

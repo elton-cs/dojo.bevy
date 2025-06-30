@@ -24,6 +24,12 @@ use torii_grpc_client::types::proto::world::RetrieveEntitiesResponse;
 use torii_grpc_client::types::{Clause, Query as ToriiQuery};
 use url::Url;
 
+/// Represents the state of a subscription task
+pub struct SubscriptionTaskState {
+    pub task: Task<()>,
+    pub is_active: bool,
+}
+
 /// The Dojo v2 plugin using native Bevy tasks.
 pub struct DojoPluginV2;
 
@@ -63,9 +69,10 @@ pub struct ToriiConnectionV2 {
     pub client: Option<Arc<Mutex<WorldClient>>>,
     pub pending_retrieve_entities:
         VecDeque<Task<Result<RetrieveEntitiesResponse, torii_grpc_client::Error>>>,
-    pub subscriptions: Arc<Mutex<HashMap<String, Task<()>>>>,
+    pub subscriptions: Arc<Mutex<HashMap<String, SubscriptionTaskState>>>,
     pub subscription_sender: Option<Sender<(Felt, Vec<Struct>)>>,
     pub subscription_receiver: Option<Receiver<(Felt, Vec<Struct>)>>,
+    pub pending_subscription_stores: VecDeque<Task<Result<(), String>>>,
 }
 
 /// Main Dojo resource using Bevy tasks.
@@ -160,17 +167,31 @@ impl DojoResourceV2 {
                 }
             });
 
-            // Store the subscription task - we'll need to handle this async
+            // Store the subscription task with proper cleanup of old subscriptions
             let subscriptions = self.torii.subscriptions.clone();
             let task_id = id.clone();
-            let store_task: Task<Result<(), &'static str>> = IoTaskPool::get().spawn(async move {
+            let store_task: Task<Result<(), String>> = IoTaskPool::get().spawn(async move {
                 let mut subs = subscriptions.lock().await;
-                subs.insert(task_id, task);
+
+                // Clean up old subscription if it exists
+                if let Some(_old_state) = subs.remove(&task_id) {
+                    // Mark old task as inactive (it will naturally terminate)
+                    debug!("Replacing existing subscription: {}", task_id);
+                }
+
+                subs.insert(
+                    task_id,
+                    SubscriptionTaskState {
+                        task,
+                        is_active: true,
+                    },
+                );
+
                 Ok(())
             });
 
-            // We could store this task too, but for simplicity we'll just fire and forget
-            std::mem::drop(store_task);
+            // Store the subscription storage task to track completion
+            self.torii.pending_subscription_stores.push_back(store_task);
         } else {
             warn!("No Torii client initialized, skipping subscription.");
         }
@@ -201,6 +222,32 @@ fn check_torii_task_v2(
         } else {
             // Task not ready yet, put it back
             dojo.torii.init_task = Some(task);
+        }
+    }
+
+    // Check pending subscription storage tasks
+    let mut completed_stores = Vec::new();
+    for (index, task) in dojo
+        .torii
+        .pending_subscription_stores
+        .iter_mut()
+        .enumerate()
+    {
+        if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
+            completed_stores.push((index, result));
+        }
+    }
+
+    // Process completed subscription storage tasks
+    for (index, result) in completed_stores.into_iter().rev() {
+        dojo.torii.pending_subscription_stores.remove(index);
+        match result {
+            Ok(_) => {
+                debug!("Subscription successfully stored");
+            }
+            Err(e) => {
+                error!("Failed to store subscription: {}", e);
+            }
         }
     }
 
@@ -258,27 +305,36 @@ fn check_sn_task_v2(mut dojo: ResMut<DojoResourceV2>) {
         }
     }
 
-    // Check pending transactions
-    if !dojo.sn.pending_txs.is_empty() && dojo.sn.account.is_some() {
-        let mut completed_tasks = Vec::new();
-        for (index, task) in dojo.sn.pending_txs.iter_mut().enumerate() {
-            if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
-                completed_tasks.push((index, result));
-            }
-        }
-
-        // Process completed tasks in reverse order to maintain indices
-        for (index, result) in completed_tasks.into_iter().rev() {
-            dojo.sn.pending_txs.remove(index);
-
-            match result {
-                Ok(tx_result) => {
-                    info!("Transaction completed: {:#x}", tx_result.transaction_hash);
-                }
-                Err(e) => {
-                    error!("Transaction failed: {:?}", e);
+    // Check pending transactions - only if we have an account and pending transactions
+    if !dojo.sn.pending_txs.is_empty() {
+        if dojo.sn.account.is_some() {
+            let mut completed_tasks = Vec::new();
+            for (index, task) in dojo.sn.pending_txs.iter_mut().enumerate() {
+                if let Some(result) = bevy::tasks::block_on(bevy::tasks::poll_once(task)) {
+                    completed_tasks.push((index, result));
                 }
             }
+
+            // Process completed tasks in reverse order to maintain indices
+            for (index, result) in completed_tasks.into_iter().rev() {
+                dojo.sn.pending_txs.remove(index);
+
+                match result {
+                    Ok(tx_result) => {
+                        info!("Transaction completed: {:#x}", tx_result.transaction_hash);
+                    }
+                    Err(e) => {
+                        error!("Transaction failed: {:?}", e);
+                    }
+                }
+            }
+        } else {
+            // Clear pending transactions if no account is available
+            warn!(
+                "Clearing {} pending transactions - no account available",
+                dojo.sn.pending_txs.len()
+            );
+            dojo.sn.pending_txs.clear();
         }
     }
 }
