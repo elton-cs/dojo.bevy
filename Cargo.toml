@@ -8,7 +8,7 @@ anyhow = "1"
 bevy = "0.16.0"
 starknet = "0.13"
 url = "2"
-tokio = { version = "1.0", features = ["full"] }
+# tokio = { version = "1.0", features = ["full"] }
 futures = "0.3"
 crossbeam-channel = "0.5"
 torii-grpc-client = { git = "https://github.com/dojoengine/torii", rev = "ee8756a" }

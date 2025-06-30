@@ -8,6 +8,7 @@ use bevy::tasks::{IoTaskPool, Task};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use dojo_types::schema::Struct;
 use futures::StreamExt;
+use futures::lock::Mutex;
 use starknet::accounts::single_owner::SignError;
 use starknet::accounts::{Account, AccountError, ExecutionEncoding, SingleOwnerAccount};
 use starknet::core::types::{BlockId, BlockTag, Call, InvokeTransactionResult};
@@ -18,7 +19,6 @@ use starknet::signers::{LocalWallet, SigningKey};
 use starknet::{core::types::Felt, providers::AnyProvider};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use torii_grpc_client::WorldClient;
 use torii_grpc_client::types::proto::world::RetrieveEntitiesResponse;
 use torii_grpc_client::types::{Clause, Query as ToriiQuery};
@@ -51,7 +51,9 @@ pub struct DojoEntityUpdatedV2 {
 pub struct StarknetConnectionV2 {
     pub connecting_task: Option<Task<Arc<SingleOwnerAccount<AnyProvider, LocalWallet>>>>,
     pub account: Option<Arc<SingleOwnerAccount<AnyProvider, LocalWallet>>>,
-    pub pending_txs: VecDeque<Task<Result<InvokeTransactionResult, AccountError<SignError<LocalWalletSignError>>>>>,
+    pub pending_txs: VecDeque<
+        Task<Result<InvokeTransactionResult, AccountError<SignError<LocalWalletSignError>>>>,
+    >,
 }
 
 /// Torii connection state using Bevy tasks.
@@ -59,7 +61,8 @@ pub struct StarknetConnectionV2 {
 pub struct ToriiConnectionV2 {
     pub init_task: Option<Task<Result<WorldClient, torii_grpc_client::Error>>>,
     pub client: Option<Arc<Mutex<WorldClient>>>,
-    pub pending_retrieve_entities: VecDeque<Task<Result<RetrieveEntitiesResponse, torii_grpc_client::Error>>>,
+    pub pending_retrieve_entities:
+        VecDeque<Task<Result<RetrieveEntitiesResponse, torii_grpc_client::Error>>>,
     pub subscriptions: Arc<Mutex<HashMap<String, Task<()>>>>,
     pub subscription_sender: Option<Sender<(Felt, Vec<Struct>)>>,
     pub subscription_receiver: Option<Receiver<(Felt, Vec<Struct>)>>,
@@ -77,9 +80,7 @@ impl DojoResourceV2 {
     pub fn connect_torii(&mut self, torii_url: String, world_address: Felt) {
         info!("Connecting to Torii (v2).");
         let task_pool = IoTaskPool::get();
-        let task = task_pool.spawn(async move { 
-            WorldClient::new(torii_url, world_address).await 
-        });
+        let task = task_pool.spawn(async move { WorldClient::new(torii_url, world_address).await });
         self.torii.init_task = Some(task);
 
         let (sender, receiver) = unbounded();
@@ -91,9 +92,8 @@ impl DojoResourceV2 {
     pub fn connect_account(&mut self, rpc_url: String, account_addr: Felt, private_key: Felt) {
         info!("Connecting to Starknet (v2).");
         let task_pool = IoTaskPool::get();
-        let task = task_pool.spawn(async move { 
-            connect_to_starknet_v2(rpc_url, account_addr, private_key).await 
-        });
+        let task = task_pool
+            .spawn(async move { connect_to_starknet_v2(rpc_url, account_addr, private_key).await });
         self.sn.connecting_task = Some(task);
     }
 
@@ -101,9 +101,8 @@ impl DojoResourceV2 {
     pub fn connect_predeployed_account(&mut self, rpc_url: String, account_idx: usize) {
         info!("Connecting to Starknet (predeployed, v2).");
         let task_pool = IoTaskPool::get();
-        let task = task_pool.spawn(async move { 
-            connect_predeployed_account_v2(rpc_url, account_idx).await 
-        });
+        let task = task_pool
+            .spawn(async move { connect_predeployed_account_v2(rpc_url, account_idx).await });
         self.sn.connecting_task = Some(task);
     }
 
@@ -145,7 +144,7 @@ impl DojoResourceV2 {
                     let mut client = client.lock().await;
                     client.subscribe_entities(clause).await
                 };
-                
+
                 match subscription_result {
                     Ok(mut subscription) => {
                         while let Some(Ok((n, e))) = subscription.next().await {
@@ -169,7 +168,7 @@ impl DojoResourceV2 {
                 subs.insert(task_id, task);
                 Ok(())
             });
-            
+
             // We could store this task too, but for simplicity we'll just fire and forget
             std::mem::drop(store_task);
         } else {
@@ -216,14 +215,18 @@ fn check_torii_task_v2(
     // Process completed tasks in reverse order to maintain indices
     for (index, result) in completed_tasks.into_iter().rev() {
         dojo.torii.pending_retrieve_entities.remove(index);
-        
+
         match result {
             Ok(response) => {
                 debug!("Retrieve entities response: {:?}", response);
                 for e in response.entities {
                     ev_retrieve_entities.write(DojoEntityUpdatedV2 {
                         entity_id: Felt::from_bytes_be_slice(&e.hashed_keys),
-                        models: e.models.into_iter().map(|m| m.try_into().unwrap()).collect(),
+                        models: e
+                            .models
+                            .into_iter()
+                            .map(|m| m.try_into().unwrap())
+                            .collect(),
                     });
                 }
             }
@@ -267,7 +270,7 @@ fn check_sn_task_v2(mut dojo: ResMut<DojoResourceV2>) {
         // Process completed tasks in reverse order to maintain indices
         for (index, result) in completed_tasks.into_iter().rev() {
             dojo.sn.pending_txs.remove(index);
-            
+
             match result {
                 Ok(tx_result) => {
                     info!("Transaction completed: {:#x}", tx_result.transaction_hash);

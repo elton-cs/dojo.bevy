@@ -2664,7 +2664,6 @@ dependencies = [
  "serde",
  "serde_json",
  "starknet 0.13.0",
- "tokio",
  "torii-grpc-client",
  "url",
 ]
